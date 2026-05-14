@@ -1,0 +1,16 @@
+# 忽略 API 金鑰設定檔 (最重要！)
+/src/main/resources/application.properties
+
+# 忽略編譯產生的暫存資料夾
+/target/
+bin/
+
+# 忽略 IDE 的私人物件
+.settings/
+.vscode/
+.idea/
+*.iml
+
+# 忽略作業系統產生的垃圾檔
+DS_Store
+Thumbs.db
