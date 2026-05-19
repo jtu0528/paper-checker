@@ -3,12 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>淡江統計 - 論文查驗系統</title>
+    <title>淡江統計 - 論文查驗系統 v2.0</title>
     <style>
+        /* 🎨 保留原本極具質感的背景與字體風格 */
         body { font-family: 'PingFang TC', 'Microsoft JhengHei', sans-serif; background: #f0f4f8; padding: 40px; color: #333; }
         .container { max-width: 1200px; margin: auto; background: white; padding: 40px; border-radius: 16px; box-shadow: 0 10px 40px rgba(0,0,0,0.08); }
         
-        /* 標題改為你要求的文字 */
         h2 { color: #1a73e8; border-bottom: 2px solid #e8f0fe; padding-bottom: 15px; margin-bottom: 30px; font-weight: 700; }
         
         textarea { width: 100%; height: 140px; padding: 15px; border: 2px solid #eee; border-radius: 12px; font-size: 15px; transition: 0.3s; box-sizing: border-box; }
@@ -17,17 +17,32 @@
         button { background: #1a73e8; color: white; border: none; padding: 14px 35px; border-radius: 8px; cursor: pointer; font-size: 16px; margin-top: 15px; font-weight: bold; transition: 0.2s; }
         button:hover { background: #1557b0; transform: translateY(-1px); }
 
+        /* 🌟 保留你設計的頂級「卡片懸浮式表格」 */
         table { width: 100%; border-collapse: separate; border-spacing: 0 12px; margin-top: 30px; }
         th { color: #5f6368; font-size: 14px; text-transform: uppercase; padding: 10px 20px; text-align: left; }
-        td { background: #fff; padding: 22px; border-top: 1px solid #f1f3f4; border-bottom: 1px solid #f1f3f4; vertical-align: top; }
+        td { background: #fff; padding: 22px; border-top: 1px solid #f1f3f4; border-bottom: 1px solid #f1f3f4; vertical-align: top; transition: background 0.2s; }
         td:first-child { border-left: 1px solid #f1f3f4; border-radius: 12px 0 0 12px; }
         td:last-child { border-right: 1px solid #f1f3f4; border-radius: 0 12px 12px 0; }
 
+        /* 🚨 新增：當論文不存在或出錯時，整張懸浮卡片淡淡變紅，與後端排序完美搭配，達成「異常置頂聚焦」 */
+        tr.row-danger td { background: #fdf2f2; border-top-color: #fde8e8; border-bottom-color: #fde8e8; }
+        tr.row-danger td:first-child { border-left-color: #fde8e8; }
+        tr.row-danger td:last-child { border-right-color: #fde8e8; }
+
+        /* 🌟 擴充徽章色系：與原有的 IEEE 柔和綠、Other 藍保持絕對視覺和諧 */
         .badge { padding: 6px 14px; border-radius: 8px; font-weight: bold; font-size: 12px; display: inline-block; min-width: 110px; text-align: center; }
         .ieee { background: #e6f4ea; color: #1e8e3e; }
         .other { background: #e8f0fe; color: #1967d2; }
-        .missing { background: #fce8e6; color: #d93025; }
         .error { background: #f1f3f4; color: #5f6368; }
+        
+        /* 新增：多網域學術平台柔和徽章 */
+        .acm { background: #e0f2f1; color: #004d40; }
+        .arxiv { background: #f3e5f5; color: #4a148c; }
+        .springer { background: #efebe9; color: #5d4037; }
+        .elsevier { background: #fff3e0; color: #e65100; }
+        
+        /* ⚠️ 修改：查無此文的大紅警示徽章 */
+        .missing { background: #fce8e6; color: #d93025; }
 
         .official-title { color: #1a73e8; font-style: italic; font-weight: 600; display: block; margin-top: 8px; line-height: 1.5; font-size: 14px; }
         .raw-input { color: #333; font-weight: 500; font-size: 14px; }
@@ -38,18 +53,53 @@
             padding: 8px 16px; border-radius: 8px; transition: 0.2s; font-size: 13px; white-space: nowrap; 
         }
         .btn-link:hover { background: #1a73e8; color: white; }
+
+        /* 🚀 新增功能所需 CSS：頁籤切換（Tabs）與 PDF 上傳樣式 */
+        .tabs { display: flex; gap: 10px; margin-bottom: 22px; border-bottom: 2px solid #e8f0fe; padding-bottom: 10px; }
+        .tab-btn { background: #e8f0fe; color: #1a73e8; border: none; padding: 10px 24px; font-size: 14px; border-radius: 8px; cursor: pointer; font-weight: bold; transition: 0.2s; }
+        .tab-btn.active { background: #1a73e8; color: white; }
+        .tab-content { display: none; background: #fafbfc; padding: 20px; border-radius: 12px; border: 1px solid #e8f0fe; }
+        .tab-content.active { display: block; }
+        
+        .pdf-box { border: 2px dashed #1a73e8; background: #fff; padding: 30px; text-align: center; border-radius: 12px; cursor: pointer; transition: 0.2s; }
+        .pdf-box:hover { background: #e8f0fe; }
+        .hint-text { color: #d93025; font-size: 12px; margin-top: 8px; font-weight: bold; display: block; }
     </style>
 </head>
 <body>
 
     <div class="container">
-        <!-- 系統介面標題修正 -->
         <h2>淡江統計 - 論文查驗系統</h2>
         
-        <form action="/check" method="post">
-            <textarea name="list" placeholder="請在此貼上參考文獻內容 (每行一篇)..."></textarea>
-            <button type="submit">啟動 AI 落地驗證</button>
-        </form>
+        <div class="tabs">
+            <button class="tab-btn active" onclick="switchTab(event, 'tab-standard')">📝 逐行標題查驗</button>
+            <button class="tab-btn" onclick="switchTab(event, 'tab-messy')">✂️ 貼上整串文獻區塊</button>
+            <button class="tab-btn" onclick="switchTab(event, 'tab-pdf')">📂 直接上傳 PDF 檔案</button>
+        </div>
+
+        <div id="tab-standard" class="tab-content active">
+            <form action="/check" method="post">
+                <textarea name="list" placeholder="請在此貼上參考文獻內容 (每行一篇)..."></textarea>
+                <button type="submit">啟動 AI 落地驗證</button>
+            </form>
+        </div>
+
+        <div id="tab-messy" class="tab-content">
+            <form action="/checkMessy" method="post">
+                <textarea name="messyText" placeholder="直接複製貼上論文最末頁整段混亂的 References 區塊（系統將調用 Gemini 智慧清洗提取標題）..."></textarea>
+                <button type="submit" style="background: #1967d2;">啟動 Gemini 語意清洗驗證</button>
+            </form>
+        </div>
+
+        <div id="tab-pdf" class="tab-content">
+            <form action="/checkPdf" method="post" enctype="multipart/form-data">
+                <div class="pdf-box" onclick="document.getElementById('pdfInput').click()">
+                    <input type="file" id="pdfInput" name="pdfFile" accept=".pdf" required style="display: none;" onchange="showFileName(this)">
+                    <span id="pdfHint" style="color: #5f6368; font-weight: 600;">📂 點擊選擇或拖曳 PDF 論文檔案至此處上傳</span>
+                </div>
+                <button type="submit" style="background: #681da8;">全自動讀取 PDF 校核</button>
+            </form>
+        </div>
 
         <div th:if="${results != null}">
             <table>
@@ -62,7 +112,7 @@
                     </tr>
                 </thead>
                 <tbody>
-                    <tr th:each="p : ${results}">
+                    <tr th:each="p : ${results}" th:class="${p.status == 'NOT_FOUND' || p.status == 'ERROR'} ? 'row-danger' : ''">
                         <td class="raw-input" th:text="${p.rawInput}"></td>
                         <td>
                             <span th:text="${p.foundTitle}" class="official-title"></span>
@@ -70,12 +120,21 @@
                         <td>
                             <span th:if="${p.status == 'MATCHED_IEEE'}" class="badge ieee">✅ IEEE 收錄</span>
                             <span th:if="${p.status == 'MATCHED_OTHER'}" class="badge other">🌐 全網收錄</span>
-                            <span th:if="${p.status == 'NOT_FOUND'}" class="badge missing">❌ 查無此文</span>
                             <span th:if="${p.status == 'ERROR'}" class="badge error">⚙️ 系統出錯</span>
+                            
+                            <span th:if="${p.status == 'MATCHED_ACM'}" class="badge acm">📘 ACM 收錄</span>
+                            <span th:if="${p.status == 'MATCHED_ARXIV'}" class="badge arxiv">📝 arXiv 預印本</span>
+                            <span th:if="${p.status == 'MATCHED_SPRINGER'}" class="badge springer">🟢 Springer 收錄</span>
+                            <span th:if="${p.status == 'MATCHED_ELSEVIER'}" class="badge elsevier">🍊 ScienceDirect</span>
+                            
+                            <div th:if="${p.status == 'NOT_FOUND'}">
+                                <span class="badge missing">❌ 論文不存在</span>
+                                <span class="hint-text">⚠️ 建議您進行手動核對。</span>
+                            </div>
                         </td>
                         <td>
                             <a th:if="${p.jumpUrl != null}" th:href="${p.jumpUrl}" target="_blank" class="btn-link">
-                                <span th:text="${p.status == 'MATCHED_IEEE' ? '🔍 IEEE 搜尋' : '🔍 Google 搜尋'}"></span>
+                                <span th:text="${p.status == 'NOT_FOUND' ? '🔍 手動去 Google 查' : '🌐 前往官方文獻頁'}"></span>
                             </a>
                         </td>
                     </tr>
@@ -84,5 +143,25 @@
         </div>
     </div>
 
+    <script>
+        function switchTab(evt, tabId) {
+            let contents = document.getElementsByClassName("tab-content");
+            for (let i = 0; i < contents.length; i++) {
+                contents[i].className = contents[i].className.replace(" active", "");
+            }
+            let btns = document.getElementsByClassName("tab-btn");
+            for (let i = 0; i < btns.length; i++) {
+                btns[i].className = btns[i].className.replace(" active", "");
+            }
+            document.getElementById(tabId).className += " active";
+            evt.currentTarget.className += " active";
+        }
+
+        function showFileName(input) {
+            if (input.files && input.files[0]) {
+                document.getElementById("pdfHint").innerText = "🎯 已選定檔案: " + input.files[0].name;
+            }
+        }
+    </script>
 </body>
 </html>
