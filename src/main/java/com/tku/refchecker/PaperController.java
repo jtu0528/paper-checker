@@ -3,6 +3,8 @@ package com.tku.refchecker;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -13,48 +15,61 @@ import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.*;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.stream.Collectors;
 
 @Controller
 public class PaperController {
 
+    private static final Logger log = LoggerFactory.getLogger(PaperController.class);
+
     @Value("${gemini.api.key}")
     private String geminiApiKey;
+
+    // 💡 預設模型改為官方絕對支援的穩定版
+    @Value("${gemini.api.model}")
+    private String geminiModel;
+
+    private final HttpClient client = HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_2)
+            .connectTimeout(Duration.ofSeconds(10))
+            .build();
+    private final ObjectMapper mapper = new ObjectMapper();
+    
+    private final ExecutorService executor = Executors.newFixedThreadPool(10);
 
     @GetMapping("/")
     public String index() { return "index"; }
 
-    /**
-     * 🎯 功能一：逐行標題查驗
-     */
     @PostMapping("/check")
     public String check(@RequestParam("list") String list, Model model) {
-        List<Paper> results = new ArrayList<>();
+        log.info("=== 開始執行 /check (逐行查驗) ===");
         String[] references = list.split("\\r?\\n");
-        HttpClient client = HttpClient.newHttpClient();
-        ObjectMapper mapper = new ObjectMapper();
 
-        for (String ref : references) {
-            String rawInput = ref.trim();
-            if (rawInput.isEmpty()) continue;
+        List<CompletableFuture<Paper>> futures = Arrays.stream(references)
+                .map(String::trim)
+                .filter(ref -> !ref.isEmpty())
+                .map(ref -> CompletableFuture.supplyAsync(() -> processSingleTitle(ref), executor)
+                        .exceptionally(ex -> {
+                            log.error("執行緒處理 [{}] 發生錯誤: {}", ref, ex.getMessage());
+                            return new Paper(ref, "查驗失敗(執行緒異常)", "#", "ERROR");
+                        }))
+                .toList();
 
-            Paper p = processSingleTitle(rawInput, client, mapper);
-            results.add(p);
-        }
-
+        List<Paper> results = futures.stream().map(CompletableFuture::join).collect(Collectors.toList());
         sortResultsToTop(results);
         model.addAttribute("results", results);
         return "index";
     }
 
-    /**
-     * 🚀 功能二：整串混亂的 Reference 區塊貼入查詢 (含強制 JSON 模式防禦)
-     */
     @PostMapping("/checkMessy")
     public String checkMessy(@RequestParam("messyText") String messyText, Model model) {
+        log.info("=== 開始執行 /checkMessy ===");
         List<Paper> results = new ArrayList<>();
-        HttpClient client = HttpClient.newHttpClient();
-        ObjectMapper mapper = new ObjectMapper();
 
         try {
             String prompt = String.format("""
@@ -73,11 +88,22 @@ public class PaperController {
                 "generationConfig", Map.of("responseMimeType", "application/json")
             );
             
-            String geminiUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=" + geminiApiKey;
+            String geminiUrl = "https://generativelanguage.googleapis.com/v1beta/models/" + geminiModel + ":generateContent?key=" + geminiApiKey;
             String jsonBody = mapper.writeValueAsString(bodyMap);
 
-            HttpRequest req = HttpRequest.newBuilder().uri(URI.create(geminiUrl)).header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(jsonBody)).build();
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create(geminiUrl))
+                    .header("Content-Type", "application/json")
+                    .timeout(Duration.ofSeconds(30))
+                    .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
+                    .build();
+                    
             HttpResponse<String> response = client.send(req, HttpResponse.BodyHandlers.ofString());
+            
+            if (response.statusCode() != 200) {
+                log.error("Gemini API 請求失敗，狀態碼: {}", response.statusCode());
+                throw new RuntimeException("Gemini API 狀態碼異常");
+            }
             
             String aiText = mapper.readTree(response.body()).path("candidates").get(0).path("content").path("parts").get(0).path("text").asText();
             
@@ -89,17 +115,23 @@ public class PaperController {
             }
 
             JsonNode titleArray = mapper.readTree(cleanJson);
-
             if (titleArray.isArray()) {
+                List<CompletableFuture<Paper>> futures = new ArrayList<>();
                 for (JsonNode node : titleArray) {
                     String cleanTitle = node.asText().trim();
                     if (!cleanTitle.isEmpty()) {
-                        results.add(processSingleTitle(cleanTitle, client, mapper));
+                        futures.add(CompletableFuture.supplyAsync(() -> processSingleTitle(cleanTitle), executor)
+                                .exceptionally(ex -> {
+                                    log.error("執行緒錯誤 [{}]: {}", cleanTitle, ex.getMessage());
+                                    return new Paper(cleanTitle, "查驗失敗", "#", "ERROR");
+                                }));
                     }
                 }
+                results.addAll(futures.stream().map(CompletableFuture::join).toList());
             }
         } catch (Exception e) {
-            results.add(new Paper("文獻區塊結構解析失敗", "解析失敗", "#", "ERROR"));
+            log.error("checkMessy 發生嚴重錯誤: ", e);
+            results.add(new Paper("文獻區塊結構解析或網路請求超時", "解析失敗", "#", "ERROR"));
         }
 
         sortResultsToTop(results);
@@ -107,11 +139,9 @@ public class PaperController {
         return "index";
     }
 
-    /**
-     * 🚀 功能三：PDF 檔案上傳全自動校核
-     */
     @PostMapping("/checkPdf")
     public String checkPdf(@RequestParam("pdfFile") MultipartFile file, Model model) {
+        log.info("=== 開始執行 /checkPdf ===");
         List<Paper> results = new ArrayList<>();
         if (file.isEmpty()) {
             results.add(new Paper("上傳的檔案為空", "解析失敗", "#", "ERROR"));
@@ -129,9 +159,6 @@ public class PaperController {
             int refIndex = Math.max(fullText.lastIndexOf("References"), fullText.lastIndexOf("Bibliography"));
             String referenceBlock = (refIndex != -1) ? fullText.substring(refIndex) : fullText;
 
-            HttpClient client = HttpClient.newHttpClient();
-            ObjectMapper mapper = new ObjectMapper();
-
             String prompt = String.format("""
                 你是一個精準的學術文獻結構化專家。
                 請將以下這段從 PDF 論文尾頁提取出的文獻參考資料(References)區塊進行解析。
@@ -148,11 +175,22 @@ public class PaperController {
                 "generationConfig", Map.of("responseMimeType", "application/json")
             );
             
-            String geminiUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=" + geminiApiKey;
+            String geminiUrl = "https://generativelanguage.googleapis.com/v1beta/models/" + geminiModel + ":generateContent?key=" + geminiApiKey;
             String jsonBody = mapper.writeValueAsString(bodyMap);
 
-            HttpRequest req = HttpRequest.newBuilder().uri(URI.create(geminiUrl)).header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(jsonBody)).build();
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create(geminiUrl))
+                    .header("Content-Type", "application/json")
+                    .timeout(Duration.ofSeconds(30))
+                    .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
+                    .build();
+                    
             HttpResponse<String> response = client.send(req, HttpResponse.BodyHandlers.ofString());
+            
+            if (response.statusCode() != 200) {
+                log.error("Gemini API 請求失敗，狀態碼: {}", response.statusCode());
+                throw new RuntimeException("Gemini API 狀態碼異常");
+            }
             
             String aiText = mapper.readTree(response.body()).path("candidates").get(0).path("content").path("parts").get(0).path("text").asText();
             
@@ -164,16 +202,22 @@ public class PaperController {
             }
 
             JsonNode titleArray = mapper.readTree(cleanJson);
-
             if (titleArray.isArray()) {
+                List<CompletableFuture<Paper>> futures = new ArrayList<>();
                 for (JsonNode node : titleArray) {
                     String cleanTitle = node.asText().trim();
                     if (!cleanTitle.isEmpty()) {
-                        results.add(processSingleTitle(cleanTitle, client, mapper));
+                        futures.add(CompletableFuture.supplyAsync(() -> processSingleTitle(cleanTitle), executor)
+                                .exceptionally(ex -> {
+                                    log.error("執行緒錯誤 [{}]: {}", cleanTitle, ex.getMessage());
+                                    return new Paper(cleanTitle, "查驗失敗", "#", "ERROR");
+                                }));
                     }
                 }
+                results.addAll(futures.stream().map(CompletableFuture::join).toList());
             }
         } catch (Exception e) {
+            log.error("checkPdf 發生嚴重錯誤: ", e);
             results.add(new Paper("PDF 讀取或文獻區塊定位失敗", "解析失敗", "#", "ERROR"));
         }
 
@@ -182,20 +226,15 @@ public class PaperController {
         return "index";
     }
 
-    /**
-     * 🛠️ 核心處理：利用 Crossref 標題專用路由進行「精準多網域識別」
-     */
-    private Paper processSingleTitle(String rawInput, HttpClient client, ObjectMapper mapper) {
+    private Paper processSingleTitle(String rawInput) {
         try {
             String encodedTitle = URLEncoder.encode(rawInput, StandardCharsets.UTF_8);
-            
-            // 💡 關鍵優化：將原本的 query= 改為 query.title= 
-            // 這會強迫 Crossref 排除摘要和内文雜訊，只做高精確度的論文標題比對！
             String crossrefUrl = "https://api.crossref.org/works?query.title=" + encodedTitle + "&rows=1";
             
             HttpRequest req = HttpRequest.newBuilder()
                     .uri(URI.create(crossrefUrl))
                     .header("User-Agent", "PaperCheckBot/2.0 (mailto:stats@tku.edu.tw)")
+                    .timeout(Duration.ofSeconds(10))
                     .GET()
                     .build();
 
@@ -212,11 +251,18 @@ public class PaperController {
                     String publisher = firstItem.path("publisher").asText("").toLowerCase();
                     String officialTitle = firstItem.path("title").path(0).asText(rawInput);
                     
+                    // 💡 加入字串相似度門檻攔截邏輯，並改用 Google Scholar 網址
+                    double simScore = calculateSimilarity(rawInput, officialTitle);
+                    if (simScore < 0.75) {
+                        log.warn("❌ 攔截誤判！相似度僅有 {} | 輸入: [{}] | 官方: [{}]", String.format("%.2f", simScore), rawInput, officialTitle);
+                        String scholarSearchUrl = "https://scholar.google.com/scholar?q=" + URLEncoder.encode(rawInput, StandardCharsets.UTF_8);
+                        return new Paper(rawInput, rawInput, scholarSearchUrl, "NOT_FOUND");
+                    }
+
                     if (!doi.isEmpty()) {
                         String finalJumpUrl = "https://doi.org/" + doi;
-                        String status = "MATCHED_OTHER"; // 預設
+                        String status = "MATCHED_OTHER";
 
-                        // 🔍 工業級多網域自動識別機制
                         if (publisher.contains("ieee") || doi.startsWith("10.1109")) {
                             status = "MATCHED_IEEE";
                         } else if (publisher.contains("computing machinery") || publisher.contains("acm") || doi.startsWith("10.1145")) {
@@ -229,24 +275,54 @@ public class PaperController {
                             status = "MATCHED_ARXIV";
                         }
 
-                        Thread.sleep(100); 
+                        Thread.sleep(50); 
                         return new Paper(rawInput, officialTitle, finalJumpUrl, status);
                     }
                 }
             }
             
-            String googleSearchUrl = "https://www.google.com/search?q=" + URLEncoder.encode(rawInput, StandardCharsets.UTF_8);
-            return new Paper(rawInput, rawInput, googleSearchUrl, "NOT_FOUND");
+            // 💡 完全找不到時，同樣改用 Google Scholar 網址
+            String scholarSearchUrl = "https://scholar.google.com/scholar?q=" + URLEncoder.encode(rawInput, StandardCharsets.UTF_8);
+            return new Paper(rawInput, rawInput, scholarSearchUrl, "NOT_FOUND");
 
         } catch (Exception e) {
-            e.printStackTrace();
-            return new Paper(rawInput, "查驗失敗", "#", "ERROR");
+            log.error("processSingleTitle 發生異常, 標題 [{}]: {}", rawInput, e.getMessage());
+            return new Paper(rawInput, "查驗失敗或網路超時", "#", "ERROR");
         }
     }
 
-    /**
-     * 🛠️ 輔助工具：排序演算法 (Exception-First 置頂)
-     */
+    private double calculateSimilarity(String s1, String s2) {
+        String longer = s1.toLowerCase().replaceAll("[^a-z0-9]", "");
+        String shorter = s2.toLowerCase().replaceAll("[^a-z0-9]", "");
+        if (longer.length() < shorter.length()) {
+            String temp = longer; longer = shorter; shorter = temp;
+        }
+        int longerLength = longer.length();
+        if (longerLength == 0) return 1.0;
+        return (longerLength - editDistance(longer, shorter)) / (double) longerLength;
+    }
+
+    private int editDistance(String s1, String s2) {
+        int[] costs = new int[s2.length() + 1];
+        for (int i = 0; i <= s1.length(); i++) {
+            int lastValue = i;
+            for (int j = 0; j <= s2.length(); j++) {
+                if (i == 0) costs[j] = j;
+                else {
+                    if (j > 0) {
+                        int newValue = costs[j - 1];
+                        if (s1.charAt(i - 1) != s2.charAt(j - 1))
+                            newValue = Math.min(Math.min(newValue, lastValue), costs[j]) + 1;
+                        costs[j - 1] = lastValue;
+                        lastValue = newValue;
+                    }
+                }
+            }
+            if (i > 0) costs[s2.length()] = lastValue;
+        }
+        return costs[s2.length()];
+    }
+
     private void sortResultsToTop(List<Paper> results) {
         results.sort((p1, p2) -> {
             boolean p1IsProblem = "NOT_FOUND".equals(p1.getStatus()) || "ERROR".equals(p1.getStatus());
