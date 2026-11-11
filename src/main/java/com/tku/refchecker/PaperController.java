@@ -229,7 +229,7 @@ public class PaperController {
     private Paper processSingleTitle(String rawInput) {
         try {
             String encodedTitle = URLEncoder.encode(rawInput, StandardCharsets.UTF_8);
-            String crossrefUrl = "https://api.crossref.org/works?query.title=" + encodedTitle + "&rows=1";
+            String crossrefUrl = "https://api.crossref.org/works?query.title=" + encodedTitle + "&rows=5";
             
             HttpRequest req = HttpRequest.newBuilder()
                     .uri(URI.create(crossrefUrl))
@@ -245,14 +245,24 @@ public class PaperController {
                 JsonNode items = root.path("message").path("items");
                 
                 if (items.isArray() && items.size() > 0) {
-                    JsonNode firstItem = items.get(0);
+                    // 💡 從前 5 筆候選中，挑出與輸入相似度最高的那筆
+                    JsonNode bestItem = items.get(0);
+                    double simScore = -1;
+                    for (JsonNode item : items) {
+                        String title = item.path("title").path(0).asText("");
+                        if (title.isEmpty()) continue;
+                        double score = calculateSimilarity(rawInput, title);
+                        if (score > simScore) {
+                            simScore = score;
+                            bestItem = item;
+                        }
+                    }
                     
-                    String doi = firstItem.path("DOI").asText("");
-                    String publisher = firstItem.path("publisher").asText("").toLowerCase();
-                    String officialTitle = firstItem.path("title").path(0).asText(rawInput);
+                    String doi = bestItem.path("DOI").asText("");
+                    String publisher = bestItem.path("publisher").asText("").toLowerCase();
+                    String officialTitle = bestItem.path("title").path(0).asText(rawInput);
                     
                     // 💡 加入字串相似度門檻攔截邏輯，並改用 Google Scholar 網址
-                    double simScore = calculateSimilarity(rawInput, officialTitle);
                     if (simScore < 0.75) {
                         log.warn("❌ 攔截誤判！相似度僅有 {} | 輸入: [{}] | 官方: [{}]", String.format("%.2f", simScore), rawInput, officialTitle);
                         String scholarSearchUrl = "https://scholar.google.com/scholar?q=" + URLEncoder.encode(rawInput, StandardCharsets.UTF_8);
