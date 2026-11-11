@@ -21,14 +21,18 @@
 ### 🛠️ 正在處理的技術挑戰
 
 * **高難度非結構化資料洗滌 (Advanced Unstructured Parsing)**：
-  針對部分極度極端的論文參考文獻字串（如嚴重缺漏資訊、只有部分關鍵字），系統正持續微調 Gemini API 的 Prompt 結構。透過啟用強制 JSON 輸出規範（responseMimeType: "application/json"），已成功將大模型在邊際情況下的「幻覺 (Hallucination)」降至最低，確保各式複雜標題皆能穩定解析。
-* **高維度關鍵字權重碰撞優化 (False Positive Filtering)**：
-  在最新一輪的極端壓力測試中（使用非存在的自創學術標題進行測試），由於 Crossref 接口底層採用的模糊評分機制，會對高頻資工詞彙（如 Spring Boot、Real-Time）進行相似度瞎推薦。專案團隊正在整合二次驗證閘門，阻斷此類偽陽性現象。
+  部分參考文獻的格式非常混亂（如嚴重缺漏資訊、只剩部分關鍵字），Gemini 不一定能正確抓出標題，因此系統正持續調整給 Gemini 的指令（Prompt）。目前已設定 Gemini 必須以 JSON 格式回傳（responseMimeType: "application/json"），確保回傳的標題清單都能被程式正確讀取。
+* **arXiv 預印本文獻覆蓋 (Preprint Coverage)**：
+  arXiv 的 DOI（前綴 10.48550）係註冊於 DataCite 而非 Crossref，因此僅發表於 arXiv、尚未正式出版的預印本，目前會被判定為「論文不存在」，需透過 Google Scholar 連結手動核對。專案團隊曾測試以 Semantic Scholar API 作為備援來源，但其未授權共用額度在多執行緒併發查詢下頻繁觸發 429 限流，故仍在評估其他可支援高併發的資料來源。
 
 ### 📅 下一步規劃 (Roadmap)
 
 - [x] **導入 Crossref 學術後台通道**：成功以官方 API 取代傳統 Web Scraping，徹底解決連線逾時與 CAPTCHA 監獄問題。
 - [x] **紳士通道 (Polite Pool) 部署**：於 User-Agent 中嵌入合法網域宣告，獲取更寬鬆的頻寬限額與優先查詢權。
-- [ ] **字串語意相似度過濾網 (Token-based Overlap Filter)**：
-  預計於後端解包邏輯中導入 Dice's Coefficient (戴斯係數) 演算法，針對輸入標題與官方標題進行 Token 交集評分，設定 50% 的硬性放行閥值，全面封殺跨網域的關鍵字碰瓷現象。
+- [x] **字串相似度過濾網 (Similarity Gate)**：
+  於後端解包邏輯中導入 Levenshtein 編輯距離演算法，針對輸入標題與官方標題進行正規化相似度評分，設定 75% 的硬性放行閥值，全面封殺跨網域的關鍵字碰瓷現象（偽陽性）。
+- [x] **多候選最佳匹配 (Top-5 Best Match)**：
+  Crossref 查詢由僅取第 1 筆改為取前 5 筆候選結果，逐一計算相似度並挑選最高者，避免排序第一但非最佳匹配的結果造成誤判。
+- [ ] **arXiv 預印本查驗來源**：導入可支援高併發查詢的資料來源，補足 Crossref 未收錄的預印本文獻。
+- [ ] **多人同時連線使用**：目前所有使用者共用同一組 10 條執行緒，且 Crossref 與 Gemini API 皆有請求頻率限制，多人同時查驗時可能出現排隊等待或被限流的情況。後續將針對併發控制與 API 額度分配進行優化。
 - [ ] **批次大規模校核支援**：未來預計擴充前端頁籤，支援直接批次上傳 .txt 或 .bib 檔案進行大規模的文獻庫自動比對。
