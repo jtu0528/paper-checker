@@ -156,7 +156,9 @@ public class PaperController {
                 fullText = stripper.getText(doc);
             }
 
-            int refIndex = Math.max(fullText.lastIndexOf("References"), fullText.lastIndexOf("Bibliography"));
+            // 💡 轉小寫後再搜尋，才能同時找到 References / REFERENCES / references
+            String lowerText = fullText.toLowerCase(Locale.ROOT);
+            int refIndex = Math.max(lowerText.lastIndexOf("references"), lowerText.lastIndexOf("bibliography"));
             String referenceBlock = (refIndex != -1) ? fullText.substring(refIndex) : fullText;
 
             String prompt = String.format("""
@@ -239,6 +241,12 @@ public class PaperController {
                     .build();
 
             HttpResponse<String> response = client.send(req, HttpResponse.BodyHandlers.ofString());
+            
+            // 💡 Crossref 回應異常（如 429 限流、5xx 伺服器錯誤）時標為 ERROR，避免誤判為查無此文
+            if (response.statusCode() != 200) {
+                log.warn("Crossref 回應異常，狀態碼: {} | 標題: [{}]", response.statusCode(), rawInput);
+                return new Paper(rawInput, "查驗失敗(Crossref 回應異常)", "#", "ERROR");
+            }
             
             if (response.statusCode() == 200) {
                 JsonNode root = mapper.readTree(response.body());
