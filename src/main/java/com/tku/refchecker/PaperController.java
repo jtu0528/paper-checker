@@ -40,7 +40,8 @@ public class PaperController {
             .build();
     private final ObjectMapper mapper = new ObjectMapper();
     
-    private final ExecutorService executor = Executors.newFixedThreadPool(10);
+    // 💡 降低同時查詢數量，避免觸發 Crossref 限流
+    private final ExecutorService executor = Executors.newFixedThreadPool(3);
 
     @GetMapping("/")
     public String index() { return "index"; }
