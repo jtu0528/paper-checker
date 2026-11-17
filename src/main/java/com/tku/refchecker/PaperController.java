@@ -237,7 +237,7 @@ public class PaperController {
             HttpRequest req = HttpRequest.newBuilder()
                     .uri(URI.create(crossrefUrl))
                     .header("User-Agent", "PaperCheckBot/2.0 (mailto:stats@tku.edu.tw)")
-                    .timeout(Duration.ofSeconds(10))
+                    .timeout(Duration.ofSeconds(15))
                     .GET()
                     .build();
 
