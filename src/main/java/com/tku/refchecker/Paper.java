@@ -11,7 +11,7 @@ public class Paper {
     
     private String rawInput;     // 使用者輸入的原始名稱（或從整串文獻、PDF 中清洗出來的原始標題）
     
-    private String foundTitle;   // Gemini 搜尋驗證後抓取到的「官方完整全稱」
+    private String foundTitle;   // Crossref 查詢比對後取得的「官方完整全稱」
     
     private String jumpUrl;      // 升級版直達連結（有找到就直接跳轉 IEEE/ACM/arXiv 官方頁面；找不到則退回 Google 搜尋）
     
