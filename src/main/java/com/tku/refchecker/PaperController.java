@@ -20,6 +20,7 @@ import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 @Controller
@@ -55,6 +56,7 @@ public class PaperController {
                 .map(String::trim)
                 .filter(ref -> !ref.isEmpty())
                 .map(ref -> CompletableFuture.supplyAsync(() -> processSingleTitle(ref), executor)
+                        .orTimeout(3, TimeUnit.MINUTES)
                         .exceptionally(ex -> {
                             log.error("執行緒處理 [{}] 發生錯誤: {}", ref, ex.getMessage());
                             return new Paper(ref, "查驗失敗(執行緒異常)", "#", "ERROR");
@@ -122,6 +124,7 @@ public class PaperController {
                     String cleanTitle = node.asText().trim();
                     if (!cleanTitle.isEmpty()) {
                         futures.add(CompletableFuture.supplyAsync(() -> processSingleTitle(cleanTitle), executor)
+                                .orTimeout(3, TimeUnit.MINUTES)
                                 .exceptionally(ex -> {
                                     log.error("執行緒錯誤 [{}]: {}", cleanTitle, ex.getMessage());
                                     return new Paper(cleanTitle, "查驗失敗", "#", "ERROR");
@@ -211,6 +214,7 @@ public class PaperController {
                     String cleanTitle = node.asText().trim();
                     if (!cleanTitle.isEmpty()) {
                         futures.add(CompletableFuture.supplyAsync(() -> processSingleTitle(cleanTitle), executor)
+                                .orTimeout(3, TimeUnit.MINUTES)
                                 .exceptionally(ex -> {
                                     log.error("執行緒錯誤 [{}]: {}", cleanTitle, ex.getMessage());
                                     return new Paper(cleanTitle, "查驗失敗", "#", "ERROR");
@@ -294,7 +298,6 @@ public class PaperController {
                             status = "MATCHED_ARXIV";
                         }
 
-                        Thread.sleep(50); 
                         return new Paper(rawInput, officialTitle, finalJumpUrl, status);
                     }
                 }
