@@ -75,64 +75,7 @@ public class PaperController {
         List<Paper> results = new ArrayList<>();
 
         try {
-            String prompt = String.format("""
-                你是一個精準的學術文獻結構化專家。
-                請將以下這段混亂、包含換行錯誤或多餘標點的文獻參考資料(References)區塊進行解析。
-                請純粹提取出其中所有論文的「完整真實標題」，忽略作者、年份、期刊名稱與頁碼。
-                請嚴格以 JSON Array 格式回傳，例如：["標題1", "標題2"]
-                注意：不要包含任何額外的文字說明。
-                
-                【待解析文獻區塊】：
-                %s
-                """, messyText);
-
-            Map<String, Object> bodyMap = Map.of(
-                "contents", List.of(Map.of("parts", List.of(Map.of("text", prompt)))),
-                "generationConfig", Map.of("responseMimeType", "application/json")
-            );
-            
-            String geminiUrl = "https://generativelanguage.googleapis.com/v1beta/models/" + geminiModel + ":generateContent?key=" + geminiApiKey;
-            String jsonBody = mapper.writeValueAsString(bodyMap);
-
-            HttpRequest req = HttpRequest.newBuilder()
-                    .uri(URI.create(geminiUrl))
-                    .header("Content-Type", "application/json")
-                    .timeout(Duration.ofSeconds(30))
-                    .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
-                    .build();
-                    
-            HttpResponse<String> response = client.send(req, HttpResponse.BodyHandlers.ofString());
-            
-            if (response.statusCode() != 200) {
-                log.error("Gemini API 請求失敗，狀態碼: {}", response.statusCode());
-                throw new RuntimeException("Gemini API 狀態碼異常");
-            }
-            
-            String aiText = mapper.readTree(response.body()).path("candidates").get(0).path("content").path("parts").get(0).path("text").asText();
-            
-            String cleanJson = aiText.trim();
-            int startIdx = cleanJson.indexOf("[");
-            int endIdx = cleanJson.lastIndexOf("]");
-            if (startIdx != -1 && endIdx != -1 && endIdx > startIdx) {
-                cleanJson = cleanJson.substring(startIdx, endIdx + 1);
-            }
-
-            JsonNode titleArray = mapper.readTree(cleanJson);
-            if (titleArray.isArray()) {
-                List<CompletableFuture<Paper>> futures = new ArrayList<>();
-                for (JsonNode node : titleArray) {
-                    String cleanTitle = node.asText().trim();
-                    if (!cleanTitle.isEmpty()) {
-                        futures.add(CompletableFuture.supplyAsync(() -> processSingleTitle(cleanTitle), executor)
-                                .orTimeout(3, TimeUnit.MINUTES)
-                                .exceptionally(ex -> {
-                                    log.error("執行緒錯誤 [{}]: {}", cleanTitle, ex.getMessage());
-                                    return new Paper(cleanTitle, "查驗失敗", "#", "ERROR");
-                                }));
-                    }
-                }
-                results.addAll(futures.stream().map(CompletableFuture::join).toList());
-            }
+            results.addAll(extractAndVerify("混亂、包含換行錯誤或多餘標點", messyText));
         } catch (Exception e) {
             log.error("checkMessy 發生嚴重錯誤: ", e);
             results.add(new Paper("文獻區塊結構解析或網路請求超時", "解析失敗", "#", "ERROR"));
@@ -165,64 +108,7 @@ public class PaperController {
             int refIndex = Math.max(lowerText.lastIndexOf("references"), lowerText.lastIndexOf("bibliography"));
             String referenceBlock = (refIndex != -1) ? fullText.substring(refIndex) : fullText;
 
-            String prompt = String.format("""
-                你是一個精準的學術文獻結構化專家。
-                請將以下這段從 PDF 論文尾頁提取出的文獻參考資料(References)區塊進行解析。
-                請純粹提取出其中所有論文的「完整真實標題」，忽略作者、年份、期刊名稱與頁碼。
-                請嚴格以 JSON Array 格式回傳，例如：["標題1", "標題2"]
-                注意：不要包含任何額外的文字說明。
-                
-                【待解析文獻區塊】：
-                %s
-                """, referenceBlock);
-
-            Map<String, Object> bodyMap = Map.of(
-                "contents", List.of(Map.of("parts", List.of(Map.of("text", prompt)))),
-                "generationConfig", Map.of("responseMimeType", "application/json")
-            );
-            
-            String geminiUrl = "https://generativelanguage.googleapis.com/v1beta/models/" + geminiModel + ":generateContent?key=" + geminiApiKey;
-            String jsonBody = mapper.writeValueAsString(bodyMap);
-
-            HttpRequest req = HttpRequest.newBuilder()
-                    .uri(URI.create(geminiUrl))
-                    .header("Content-Type", "application/json")
-                    .timeout(Duration.ofSeconds(30))
-                    .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
-                    .build();
-                    
-            HttpResponse<String> response = client.send(req, HttpResponse.BodyHandlers.ofString());
-            
-            if (response.statusCode() != 200) {
-                log.error("Gemini API 請求失敗，狀態碼: {}", response.statusCode());
-                throw new RuntimeException("Gemini API 狀態碼異常");
-            }
-            
-            String aiText = mapper.readTree(response.body()).path("candidates").get(0).path("content").path("parts").get(0).path("text").asText();
-            
-            String cleanJson = aiText.trim();
-            int startIdx = cleanJson.indexOf("[");
-            int endIdx = cleanJson.lastIndexOf("]");
-            if (startIdx != -1 && endIdx != -1 && endIdx > startIdx) {
-                cleanJson = cleanJson.substring(startIdx, endIdx + 1);
-            }
-
-            JsonNode titleArray = mapper.readTree(cleanJson);
-            if (titleArray.isArray()) {
-                List<CompletableFuture<Paper>> futures = new ArrayList<>();
-                for (JsonNode node : titleArray) {
-                    String cleanTitle = node.asText().trim();
-                    if (!cleanTitle.isEmpty()) {
-                        futures.add(CompletableFuture.supplyAsync(() -> processSingleTitle(cleanTitle), executor)
-                                .orTimeout(3, TimeUnit.MINUTES)
-                                .exceptionally(ex -> {
-                                    log.error("執行緒錯誤 [{}]: {}", cleanTitle, ex.getMessage());
-                                    return new Paper(cleanTitle, "查驗失敗", "#", "ERROR");
-                                }));
-                    }
-                }
-                results.addAll(futures.stream().map(CompletableFuture::join).toList());
-            }
+            results.addAll(extractAndVerify("從 PDF 論文尾頁提取出", referenceBlock));
         } catch (Exception e) {
             log.error("checkPdf 發生嚴重錯誤: ", e);
             results.add(new Paper("PDF 讀取或文獻區塊定位失敗", "解析失敗", "#", "ERROR"));
@@ -231,6 +117,74 @@ public class PaperController {
         sortResultsToTop(results);
         model.addAttribute("results", results);
         return "index";
+    }
+
+    /**
+     * 呼叫 Gemini 從文獻區塊中擷取所有論文標題，再平行查驗每一篇（checkMessy 與 checkPdf 共用）
+     * @param sourceDescription 文獻區塊的來源描述（放入 Prompt 中）
+     * @param referenceBlock    待解析的文獻區塊
+     */
+    private List<Paper> extractAndVerify(String sourceDescription, String referenceBlock) throws Exception {
+        String prompt = String.format("""
+            你是一個精準的學術文獻結構化專家。
+            請將以下這段%s的文獻參考資料(References)區塊進行解析。
+            請純粹提取出其中所有論文的「完整真實標題」，忽略作者、年份、期刊名稱與頁碼。
+            請嚴格以 JSON Array 格式回傳，例如：["標題1", "標題2"]
+            注意：不要包含任何額外的文字說明。
+            
+            【待解析文獻區塊】：
+            %s
+            """, sourceDescription, referenceBlock);
+
+        Map<String, Object> bodyMap = Map.of(
+            "contents", List.of(Map.of("parts", List.of(Map.of("text", prompt)))),
+            "generationConfig", Map.of("responseMimeType", "application/json")
+        );
+        
+        String geminiUrl = "https://generativelanguage.googleapis.com/v1beta/models/" + geminiModel + ":generateContent?key=" + geminiApiKey;
+        String jsonBody = mapper.writeValueAsString(bodyMap);
+
+        HttpRequest req = HttpRequest.newBuilder()
+                .uri(URI.create(geminiUrl))
+                .header("Content-Type", "application/json")
+                .timeout(Duration.ofSeconds(30))
+                .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
+                .build();
+                
+        HttpResponse<String> response = client.send(req, HttpResponse.BodyHandlers.ofString());
+        
+        if (response.statusCode() != 200) {
+            log.error("Gemini API 請求失敗，狀態碼: {}", response.statusCode());
+            throw new RuntimeException("Gemini API 狀態碼異常");
+        }
+        
+        String aiText = mapper.readTree(response.body()).path("candidates").get(0).path("content").path("parts").get(0).path("text").asText();
+        
+        String cleanJson = aiText.trim();
+        int startIdx = cleanJson.indexOf("[");
+        int endIdx = cleanJson.lastIndexOf("]");
+        if (startIdx != -1 && endIdx != -1 && endIdx > startIdx) {
+            cleanJson = cleanJson.substring(startIdx, endIdx + 1);
+        }
+
+        List<Paper> results = new ArrayList<>();
+        JsonNode titleArray = mapper.readTree(cleanJson);
+        if (titleArray.isArray()) {
+            List<CompletableFuture<Paper>> futures = new ArrayList<>();
+            for (JsonNode node : titleArray) {
+                String cleanTitle = node.asText().trim();
+                if (!cleanTitle.isEmpty()) {
+                    futures.add(CompletableFuture.supplyAsync(() -> processSingleTitle(cleanTitle), executor)
+                            .orTimeout(3, TimeUnit.MINUTES)
+                            .exceptionally(ex -> {
+                                log.error("執行緒錯誤 [{}]: {}", cleanTitle, ex.getMessage());
+                                return new Paper(cleanTitle, "查驗失敗", "#", "ERROR");
+                            }));
+                }
+            }
+            results.addAll(futures.stream().map(CompletableFuture::join).toList());
+        }
+        return results;
     }
 
     private Paper processSingleTitle(String rawInput) {
