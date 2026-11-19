@@ -44,6 +44,10 @@ public class PaperController {
     // 💡 降低同時查詢數量，避免觸發 Crossref 限流
     private final ExecutorService executor = Executors.newFixedThreadPool(3);
 
+    // 💡 Crossref 查詢上限為每秒 1 個請求，所有執行緒共用此間隔
+    private static final long CROSSREF_INTERVAL_MS = 1000;
+    private long lastCrossrefRequestTime = 0;
+
     @GetMapping("/")
     public String index() { return "index"; }
 
@@ -64,6 +68,7 @@ public class PaperController {
                 .toList();
 
         List<Paper> results = futures.stream().map(CompletableFuture::join).collect(Collectors.toList());
+        assignIndex(results);
         sortResultsToTop(results);
         model.addAttribute("results", results);
         return "index";
@@ -184,6 +189,7 @@ public class PaperController {
             }
             results.addAll(futures.stream().map(CompletableFuture::join).toList());
         }
+        assignIndex(results);
         return results;
     }
 
@@ -199,6 +205,7 @@ public class PaperController {
                     .GET()
                     .build();
 
+            waitForCrossrefSlot();
             HttpResponse<String> response = client.send(req, HttpResponse.BodyHandlers.ofString());
             
             // 💡 Crossref 回應異常（如 429 限流、5xx 伺服器錯誤）時標為 ERROR，避免誤判為查無此文
@@ -267,6 +274,17 @@ public class PaperController {
         }
     }
 
+    /**
+     * 所有執行緒共用：確保兩次 Crossref 請求之間至少間隔 CROSSREF_INTERVAL_MS，避免觸發限流（429）
+     */
+    private synchronized void waitForCrossrefSlot() throws InterruptedException {
+        long waitMs = lastCrossrefRequestTime + CROSSREF_INTERVAL_MS - System.currentTimeMillis();
+        if (waitMs > 0) {
+            Thread.sleep(waitMs);
+        }
+        lastCrossrefRequestTime = System.currentTimeMillis();
+    }
+
     private double calculateSimilarity(String s1, String s2) {
         String longer = s1.toLowerCase().replaceAll("[^a-z0-9]", "");
         String shorter = s2.toLowerCase().replaceAll("[^a-z0-9]", "");
@@ -297,6 +315,15 @@ public class PaperController {
             if (i > 0) costs[s2.length()] = lastValue;
         }
         return costs[s2.length()];
+    }
+
+    /**
+     * 依原始輸入順序編號（從 1 開始），需在排序之前呼叫，排序後仍可對回原文的第幾篇
+     */
+    private void assignIndex(List<Paper> results) {
+        for (int i = 0; i < results.size(); i++) {
+            results.get(i).setIndex(i + 1);
+        }
     }
 
     private void sortResultsToTop(List<Paper> results) {

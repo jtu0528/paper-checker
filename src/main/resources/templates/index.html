@@ -105,14 +105,16 @@
             <table>
                 <thead>
                     <tr>
+                        <th style="width: 5%;">#</th>
                         <th style="width: 30%;">使用者輸入內容</th>
-                        <th style="width: 40%;">AI 實時驗證結果 (官方全稱)</th>
+                        <th style="width: 35%;">AI 實時驗證結果 (官方全稱)</th>
                         <th style="width: 15%;">收錄狀態</th>
                         <th style="width: 15%;">手動驗證連結</th>
                     </tr>
                 </thead>
                 <tbody>
                     <tr th:each="p : ${results}" th:class="${p.status == 'NOT_FOUND' || p.status == 'ERROR'} ? 'row-danger' : ''">
+                        <td class="raw-input" th:text="${p.index > 0 ? p.index : ''}"></td>
                         <td class="raw-input" th:text="${p.rawInput}"></td>
                         <td>
                             <span th:text="${p.foundTitle}" class="official-title"></span>

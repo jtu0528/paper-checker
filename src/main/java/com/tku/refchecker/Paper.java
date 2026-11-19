@@ -28,10 +28,12 @@ public class Paper {
      */
     private String status;       
 
+    private int index;           // 在原始輸入中的順序（從 1 開始），用來對回原文的第幾篇；整批解析失敗時為 0
+
     /**
      * 💡 以 PaperStatus 建立物件；內部仍存成字串，前端讀到的值與原本完全相同
      */
     public Paper(String rawInput, String foundTitle, String jumpUrl, PaperStatus status) {
-        this(rawInput, foundTitle, jumpUrl, status.name());
+        this(rawInput, foundTitle, jumpUrl, status.name(), 0);
     }
 }
