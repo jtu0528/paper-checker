@@ -27,4 +27,11 @@ public class Paper {
      * - ERROR            : ⚠️ 系統連線異常或解析失敗（前端自動置頂）
      */
     private String status;       
+
+    /**
+     * 💡 以 PaperStatus 建立物件；內部仍存成字串，前端讀到的值與原本完全相同
+     */
+    public Paper(String rawInput, String foundTitle, String jumpUrl, PaperStatus status) {
+        this(rawInput, foundTitle, jumpUrl, status.name());
+    }
 }

@@ -59,7 +59,7 @@ public class PaperController {
                         .orTimeout(3, TimeUnit.MINUTES)
                         .exceptionally(ex -> {
                             log.error("執行緒處理 [{}] 發生錯誤: {}", ref, ex.getMessage());
-                            return new Paper(ref, "查驗失敗(執行緒異常)", "#", "ERROR");
+                            return new Paper(ref, "查驗失敗(執行緒異常)", "#", PaperStatus.ERROR);
                         }))
                 .toList();
 
@@ -78,7 +78,7 @@ public class PaperController {
             results.addAll(extractAndVerify("混亂、包含換行錯誤或多餘標點", messyText));
         } catch (Exception e) {
             log.error("checkMessy 發生嚴重錯誤: ", e);
-            results.add(new Paper("文獻區塊結構解析或網路請求超時", "解析失敗", "#", "ERROR"));
+            results.add(new Paper("文獻區塊結構解析或網路請求超時", "解析失敗", "#", PaperStatus.ERROR));
         }
 
         sortResultsToTop(results);
@@ -91,7 +91,7 @@ public class PaperController {
         log.info("=== 開始執行 /checkPdf ===");
         List<Paper> results = new ArrayList<>();
         if (file.isEmpty()) {
-            results.add(new Paper("上傳的檔案為空", "解析失敗", "#", "ERROR"));
+            results.add(new Paper("上傳的檔案為空", "解析失敗", "#", PaperStatus.ERROR));
             model.addAttribute("results", results);
             return "index";
         }
@@ -111,7 +111,7 @@ public class PaperController {
             results.addAll(extractAndVerify("從 PDF 論文尾頁提取出", referenceBlock));
         } catch (Exception e) {
             log.error("checkPdf 發生嚴重錯誤: ", e);
-            results.add(new Paper("PDF 讀取或文獻區塊定位失敗", "解析失敗", "#", "ERROR"));
+            results.add(new Paper("PDF 讀取或文獻區塊定位失敗", "解析失敗", "#", PaperStatus.ERROR));
         }
 
         sortResultsToTop(results);
@@ -178,7 +178,7 @@ public class PaperController {
                             .orTimeout(3, TimeUnit.MINUTES)
                             .exceptionally(ex -> {
                                 log.error("執行緒錯誤 [{}]: {}", cleanTitle, ex.getMessage());
-                                return new Paper(cleanTitle, "查驗失敗", "#", "ERROR");
+                                return new Paper(cleanTitle, "查驗失敗", "#", PaperStatus.ERROR);
                             }));
                 }
             }
@@ -204,7 +204,7 @@ public class PaperController {
             // 💡 Crossref 回應異常（如 429 限流、5xx 伺服器錯誤）時標為 ERROR，避免誤判為查無此文
             if (response.statusCode() != 200) {
                 log.warn("Crossref 回應異常，狀態碼: {} | 標題: [{}]", response.statusCode(), rawInput);
-                return new Paper(rawInput, "查驗失敗(Crossref 回應異常)", "#", "ERROR");
+                return new Paper(rawInput, "查驗失敗(Crossref 回應異常)", "#", PaperStatus.ERROR);
             }
             
             if (response.statusCode() == 200) {
@@ -233,23 +233,23 @@ public class PaperController {
                     if (simScore < 0.75) {
                         log.warn("❌ 攔截誤判！相似度僅有 {} | 輸入: [{}] | 官方: [{}]", String.format("%.2f", simScore), rawInput, officialTitle);
                         String scholarSearchUrl = "https://scholar.google.com/scholar?q=" + URLEncoder.encode(rawInput, StandardCharsets.UTF_8);
-                        return new Paper(rawInput, rawInput, scholarSearchUrl, "NOT_FOUND");
+                        return new Paper(rawInput, rawInput, scholarSearchUrl, PaperStatus.NOT_FOUND);
                     }
 
                     if (!doi.isEmpty()) {
                         String finalJumpUrl = "https://doi.org/" + doi;
-                        String status = "MATCHED_OTHER";
+                        PaperStatus status = PaperStatus.MATCHED_OTHER;
 
                         if (publisher.contains("ieee") || doi.startsWith("10.1109")) {
-                            status = "MATCHED_IEEE";
+                            status = PaperStatus.MATCHED_IEEE;
                         } else if (publisher.contains("computing machinery") || publisher.contains("acm") || doi.startsWith("10.1145")) {
-                            status = "MATCHED_ACM";
+                            status = PaperStatus.MATCHED_ACM;
                         } else if (publisher.contains("springer") || doi.startsWith("10.1007")) {
-                            status = "MATCHED_SPRINGER";
+                            status = PaperStatus.MATCHED_SPRINGER;
                         } else if (publisher.contains("elsevier") || publisher.contains("science-direct") || doi.startsWith("10.1016")) {
-                            status = "MATCHED_ELSEVIER";
+                            status = PaperStatus.MATCHED_ELSEVIER;
                         } else if (publisher.contains("arxiv")) {
-                            status = "MATCHED_ARXIV";
+                            status = PaperStatus.MATCHED_ARXIV;
                         }
 
                         return new Paper(rawInput, officialTitle, finalJumpUrl, status);
@@ -259,11 +259,11 @@ public class PaperController {
             
             // 💡 完全找不到時，同樣改用 Google Scholar 網址
             String scholarSearchUrl = "https://scholar.google.com/scholar?q=" + URLEncoder.encode(rawInput, StandardCharsets.UTF_8);
-            return new Paper(rawInput, rawInput, scholarSearchUrl, "NOT_FOUND");
+            return new Paper(rawInput, rawInput, scholarSearchUrl, PaperStatus.NOT_FOUND);
 
         } catch (Exception e) {
             log.error("processSingleTitle 發生異常, 標題 [{}]: {}", rawInput, e.getMessage());
-            return new Paper(rawInput, "查驗失敗或網路超時", "#", "ERROR");
+            return new Paper(rawInput, "查驗失敗或網路超時", "#", PaperStatus.ERROR);
         }
     }
 
@@ -301,8 +301,8 @@ public class PaperController {
 
     private void sortResultsToTop(List<Paper> results) {
         results.sort((p1, p2) -> {
-            boolean p1IsProblem = "NOT_FOUND".equals(p1.getStatus()) || "ERROR".equals(p1.getStatus());
-            boolean p2IsProblem = "NOT_FOUND".equals(p2.getStatus()) || "ERROR".equals(p2.getStatus());
+            boolean p1IsProblem = PaperStatus.NOT_FOUND.name().equals(p1.getStatus()) || PaperStatus.ERROR.name().equals(p1.getStatus());
+            boolean p2IsProblem = PaperStatus.NOT_FOUND.name().equals(p2.getStatus()) || PaperStatus.ERROR.name().equals(p2.getStatus());
             if (p1IsProblem && !p2IsProblem) return -1;
             if (!p1IsProblem && p2IsProblem) return 1;
             return 0;
