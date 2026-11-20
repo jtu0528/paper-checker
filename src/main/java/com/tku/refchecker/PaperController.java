@@ -15,6 +15,7 @@ import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.*;
 import java.nio.charset.StandardCharsets;
+import java.text.Normalizer;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -133,8 +134,9 @@ public class PaperController {
         String prompt = String.format("""
             你是一個精準的學術文獻結構化專家。
             請將以下這段%s的文獻參考資料(References)區塊進行解析。
-            請純粹提取出其中所有論文的「完整真實標題」，忽略作者、年份、期刊名稱與頁碼。
-            請嚴格以 JSON Array 格式回傳，例如：["標題1", "標題2"]
+            請純粹提取出其中所有論文的「完整真實標題」與「第一作者的姓氏」，忽略其他作者、年份、期刊名稱與頁碼。
+            請嚴格以 JSON Array 格式回傳，例如：[{"title": "標題1", "firstAuthor": "姓氏1"}, {"title": "標題2", "firstAuthor": "姓氏2"}]
+            若無法辨識第一作者，firstAuthor 請填空字串。
             注意：不要包含任何額外的文字說明。
             
             【待解析文獻區塊】：
@@ -177,9 +179,11 @@ public class PaperController {
         if (titleArray.isArray()) {
             List<CompletableFuture<Paper>> futures = new ArrayList<>();
             for (JsonNode node : titleArray) {
-                String cleanTitle = node.asText().trim();
+                // 💡 新格式為 {"title": ..., "firstAuthor": ...}；若 Gemini 仍回傳純字串則視為只有標題
+                String cleanTitle = node.isObject() ? node.path("title").asText("").trim() : node.asText().trim();
+                String firstAuthor = node.isObject() ? node.path("firstAuthor").asText("").trim() : "";
                 if (!cleanTitle.isEmpty()) {
-                    futures.add(CompletableFuture.supplyAsync(() -> processSingleTitle(cleanTitle), executor)
+                    futures.add(CompletableFuture.supplyAsync(() -> processSingleTitle(cleanTitle, firstAuthor), executor)
                             .orTimeout(3, TimeUnit.MINUTES)
                             .exceptionally(ex -> {
                                 log.error("執行緒錯誤 [{}]: {}", cleanTitle, ex.getMessage());
@@ -193,7 +197,17 @@ public class PaperController {
         return results;
     }
 
+    /**
+     * 模式一（逐行標題）沒有作者資訊，只比對標題
+     */
     private Paper processSingleTitle(String rawInput) {
+        return processSingleTitle(rawInput, "");
+    }
+
+    /**
+     * @param firstAuthor 第一作者的姓氏；空字串代表不比對作者
+     */
+    private Paper processSingleTitle(String rawInput, String firstAuthor) {
         try {
             String encodedTitle = URLEncoder.encode(rawInput, StandardCharsets.UTF_8);
             String crossrefUrl = "https://api.crossref.org/works?query.title=" + encodedTitle + "&rows=5";
@@ -222,6 +236,10 @@ public class PaperController {
                     // 💡 從前 5 筆候選中，挑出與輸入相似度最高的那筆
                     JsonNode bestItem = items.get(0);
                     double simScore = -1;
+                    // 💡 同時記錄「標題通過門檻且第一作者相符」的最佳候選，避免同名不同作者時選錯篇
+                    JsonNode bestAuthorItem = null;
+                    double bestAuthorScore = -1;
+                    boolean checkAuthor = !firstAuthor.isEmpty();
                     for (JsonNode item : items) {
                         String title = item.path("title").path(0).asText("");
                         if (title.isEmpty()) continue;
@@ -230,6 +248,15 @@ public class PaperController {
                             simScore = score;
                             bestItem = item;
                         }
+                        if (checkAuthor && score >= 0.75 && score > bestAuthorScore
+                                && authorMatches(firstAuthor, getCrossrefFirstAuthor(item))) {
+                            bestAuthorScore = score;
+                            bestAuthorItem = item;
+                        }
+                    }
+                    if (bestAuthorItem != null) {
+                        bestItem = bestAuthorItem;
+                        simScore = bestAuthorScore;
                     }
                     
                     String doi = bestItem.path("DOI").asText("");
@@ -241,6 +268,16 @@ public class PaperController {
                         log.warn("❌ 攔截誤判！相似度僅有 {} | 輸入: [{}] | 官方: [{}]", String.format("%.2f", simScore), rawInput, officialTitle);
                         String scholarSearchUrl = "https://scholar.google.com/scholar?q=" + URLEncoder.encode(rawInput, StandardCharsets.UTF_8);
                         return new Paper(rawInput, rawInput, scholarSearchUrl, PaperStatus.NOT_FOUND);
+                    }
+
+                    // 💡 標題通過但第一作者不符（同名不同作者）→ 視為查無此文
+                    if (checkAuthor && bestAuthorItem == null) {
+                        String crossrefAuthor = getCrossrefFirstAuthor(bestItem);
+                        if (!crossrefAuthor.isEmpty()) {
+                            log.warn("❌ 作者不符！輸入作者: [{}] | 官方作者: [{}] | 標題: [{}]", firstAuthor, crossrefAuthor, rawInput);
+                            String scholarSearchUrl = "https://scholar.google.com/scholar?q=" + URLEncoder.encode(rawInput, StandardCharsets.UTF_8);
+                            return new Paper(rawInput, rawInput, scholarSearchUrl, PaperStatus.NOT_FOUND);
+                        }
                     }
 
                     if (!doi.isEmpty()) {
@@ -283,6 +320,41 @@ public class PaperController {
             Thread.sleep(waitMs);
         }
         lastCrossrefRequestTime = System.currentTimeMillis();
+    }
+
+    /**
+     * 取出 Crossref 資料中第一作者的姓氏（優先取 sequence 為 first 者）；沒有作者資料時回傳空字串
+     */
+    private String getCrossrefFirstAuthor(JsonNode item) {
+        JsonNode authors = item.path("author");
+        if (!authors.isArray() || authors.size() == 0) return "";
+        JsonNode first = authors.get(0);
+        for (JsonNode a : authors) {
+            if ("first".equals(a.path("sequence").asText())) {
+                first = a;
+                break;
+            }
+        }
+        String family = first.path("family").asText("");
+        return family.isEmpty() ? first.path("name").asText("") : family;
+    }
+
+    /**
+     * 比對第一作者姓氏：忽略大小寫、重音符號與標點；完全相同或其中一方以另一方結尾即視為相符
+     * （例如 "A. Smith" 與 "Smith"、"van der Aalst" 與 "Aalst"；"Li" 與 "Lin" 則不相符）
+     */
+    private boolean authorMatches(String inputAuthor, String crossrefAuthor) {
+        String a = normalizeName(inputAuthor);
+        String b = normalizeName(crossrefAuthor);
+        if (a.isEmpty() || b.isEmpty()) return false;
+        return a.endsWith(b) || b.endsWith(a);
+    }
+
+    private String normalizeName(String name) {
+        return Normalizer.normalize(name, Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "")
+                .toLowerCase(Locale.ROOT)
+                .replaceAll("[^a-z]", "");
     }
 
     private double calculateSimilarity(String s1, String s2) {
