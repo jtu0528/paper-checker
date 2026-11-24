@@ -45,7 +45,7 @@ public class PaperController {
     // 💡 降低同時查詢數量，避免觸發 Crossref 限流
     private final ExecutorService executor = Executors.newFixedThreadPool(3);
 
-    // 💡 Crossref 查詢上限為每秒 1 個請求，所有執行緒共用此間隔
+    // 💡 Crossref 查詢上限為每秒 1 個請求，所有執行緒共用此間隔（多留 0.1 秒緩衝）
     private static final long CROSSREF_INTERVAL_MS = 1100;
     private long lastCrossrefRequestTime = 0;
 
@@ -237,7 +237,7 @@ public class PaperController {
                 JsonNode items = root.path("message").path("items");
                 
                 if (items.isArray() && items.size() > 0) {
-                    // 💡 從前 5 筆候選中，挑出與輸入相似度最高的那筆
+                    // 💡 從前 10 筆候選中，挑出與輸入相似度最高的那筆
                     JsonNode bestItem = items.get(0);
                     double simScore = -1;
                     // 💡 同時記錄「標題通過門檻且第一作者相符」的最佳候選，避免同名不同作者時選錯篇
@@ -270,7 +270,7 @@ public class PaperController {
                     
                     // 💡 加入字串相似度門檻攔截邏輯，並改用 Google Scholar 網址
                     if (simScore < 0.75) {
-                        log.warn("❌ 攔截誤判！相似度僅有 {} | 輸入: [{}] | 官方: [{}]", String.format("%.2f", simScore), rawInput, officialTitle);
+                        log.warn("❌ 攔截誤判！相似度僅有 {} | 輸入: [{}] | 作者: [{}] | 官方: [{}]", String.format("%.2f", simScore), rawInput, firstAuthor, officialTitle);
                         String scholarSearchUrl = "https://scholar.google.com/scholar?q=" + URLEncoder.encode(rawInput, StandardCharsets.UTF_8);
                         return new Paper(rawInput, rawInput, scholarSearchUrl, PaperStatus.NOT_FOUND);
                     }
