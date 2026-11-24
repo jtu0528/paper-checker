@@ -46,7 +46,7 @@ public class PaperController {
     private final ExecutorService executor = Executors.newFixedThreadPool(3);
 
     // 💡 Crossref 查詢上限為每秒 1 個請求，所有執行緒共用此間隔
-    private static final long CROSSREF_INTERVAL_MS = 1000;
+    private static final long CROSSREF_INTERVAL_MS = 1100;
     private long lastCrossrefRequestTime = 0;
 
     @GetMapping("/")
@@ -210,7 +210,11 @@ public class PaperController {
     private Paper processSingleTitle(String rawInput, String firstAuthor) {
         try {
             String encodedTitle = URLEncoder.encode(rawInput, StandardCharsets.UTF_8);
-            String crossrefUrl = "https://api.crossref.org/works?query.title=" + encodedTitle + "&rows=5";
+            String crossrefUrl = "https://api.crossref.org/works?query.title=" + encodedTitle + "&rows=10";
+            // 💡 有第一作者時一併帶入搜尋，讓正確的論文排到前面（請求數不變）
+            if (!firstAuthor.isEmpty()) {
+                crossrefUrl += "&query.author=" + URLEncoder.encode(firstAuthor, StandardCharsets.UTF_8);
+            }
             
             HttpRequest req = HttpRequest.newBuilder()
                     .uri(URI.create(crossrefUrl))
@@ -241,7 +245,7 @@ public class PaperController {
                     double bestAuthorScore = -1;
                     boolean checkAuthor = !firstAuthor.isEmpty();
                     for (JsonNode item : items) {
-                        String title = item.path("title").path(0).asText("");
+                        String title = getFullTitle(item);
                         if (title.isEmpty()) continue;
                         double score = calculateSimilarity(rawInput, title);
                         if (score > simScore) {
@@ -261,7 +265,8 @@ public class PaperController {
                     
                     String doi = bestItem.path("DOI").asText("");
                     String publisher = bestItem.path("publisher").asText("").toLowerCase();
-                    String officialTitle = bestItem.path("title").path(0).asText(rawInput);
+                    String fullTitle = getFullTitle(bestItem);
+                    String officialTitle = fullTitle.isEmpty() ? rawInput : fullTitle;
                     
                     // 💡 加入字串相似度門檻攔截邏輯，並改用 Google Scholar 網址
                     if (simScore < 0.75) {
@@ -320,6 +325,21 @@ public class PaperController {
             Thread.sleep(waitMs);
         }
         lastCrossrefRequestTime = System.currentTimeMillis();
+    }
+
+    /**
+     * 取出 Crossref 資料的完整標題：若有副標題（subtitle）則接在主標題後面
+     * （ACM 等出版商常將「名稱: 副標題」拆成 title 與 subtitle 兩個欄位）；
+     * 主標題已包含副標題時不重複接上
+     */
+    private String getFullTitle(JsonNode item) {
+        String title = item.path("title").path(0).asText("");
+        String subtitle = item.path("subtitle").path(0).asText("");
+        if (!title.isEmpty() && !subtitle.isEmpty()
+                && !title.toLowerCase(Locale.ROOT).contains(subtitle.toLowerCase(Locale.ROOT))) {
+            title = title + ": " + subtitle;
+        }
+        return title;
     }
 
     /**
