@@ -210,7 +210,7 @@ public class PaperController {
     private Paper processSingleTitle(String rawInput, String firstAuthor) {
         try {
             String encodedTitle = URLEncoder.encode(rawInput, StandardCharsets.UTF_8);
-            String crossrefUrl = "https://api.crossref.org/works?query.title=" + encodedTitle + "&rows=10";
+            String crossrefUrl = "https://api.crossref.org/works?query.title=" + encodedTitle + "&rows=20";
             // 💡 有第一作者時一併帶入搜尋，讓正確的論文排到前面（請求數不變）
             if (!firstAuthor.isEmpty()) {
                 crossrefUrl += "&query.author=" + URLEncoder.encode(firstAuthor, StandardCharsets.UTF_8);
