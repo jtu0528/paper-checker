@@ -7,9 +7,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Controller;
-import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import java.io.IOException;
 import java.net.URI;
@@ -72,7 +72,7 @@ public class PaperController {
     public String redirectToIndex() { return "redirect:/"; }
 
     @PostMapping("/check")
-    public String check(@RequestParam("list") String list, Model model) {
+    public String check(@RequestParam("list") String list, RedirectAttributes redirectAttributes) {
         log.info("=== 開始執行 /check (逐行查驗) ===");
         String[] references = list.split("\\r?\\n");
 
@@ -90,12 +90,13 @@ public class PaperController {
         List<Paper> results = futures.stream().map(CompletableFuture::join).collect(Collectors.toList());
         assignIndex(results);
         sortResultsToTop(results);
-        model.addAttribute("groups", List.of(new ResultGroup(null, results)));
-        return "index";
+        // 💡 PRG 模式：結果暫存為 Flash Attribute 後導回首頁，重新整理時只會重新載入首頁，不會重跑查驗
+        redirectAttributes.addFlashAttribute("groups", List.of(new ResultGroup(null, results)));
+        return "redirect:/";
     }
 
     @PostMapping("/checkMessy")
-    public String checkMessy(@RequestParam("messyText") String messyText, Model model) {
+    public String checkMessy(@RequestParam("messyText") String messyText, RedirectAttributes redirectAttributes) {
         log.info("=== 開始執行 /checkMessy ===");
         List<Paper> results = new ArrayList<>();
 
@@ -107,20 +108,22 @@ public class PaperController {
         }
 
         sortResultsToTop(results);
-        model.addAttribute("groups", List.of(new ResultGroup(null, results)));
-        return "index";
+        // 💡 PRG 模式：結果暫存為 Flash Attribute 後導回首頁，重新整理時只會重新載入首頁，不會重跑查驗
+        redirectAttributes.addFlashAttribute("groups", List.of(new ResultGroup(null, results)));
+        return "redirect:/";
     }
 
     @PostMapping("/checkPdf")
-    public String checkPdf(@RequestParam("pdfFile") List<MultipartFile> files, Model model) {
+    public String checkPdf(@RequestParam("pdfFile") List<MultipartFile> files, RedirectAttributes redirectAttributes) {
         log.info("=== 開始執行 /checkPdf（共 {} 份） ===", files.size());
         List<ResultGroup> groups = new ArrayList<>();
         // 💡 多份 PDF 依序處理，每份各自擷取參考文獻與查驗，結果分開顯示
         for (MultipartFile file : files) {
             groups.add(new ResultGroup(file.getOriginalFilename(), checkSinglePdf(file)));
         }
-        model.addAttribute("groups", groups);
-        return "index";
+        // 💡 PRG 模式：結果暫存為 Flash Attribute 後導回首頁，重新整理時只會重新載入首頁，不會重跑查驗
+        redirectAttributes.addFlashAttribute("groups", groups);
+        return "redirect:/";
     }
 
     /**
