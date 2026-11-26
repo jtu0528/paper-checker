@@ -50,6 +50,13 @@ public class PaperController {
     // 💡 遇到 429 時的重試次數與等待時間
     private static final int CROSSREF_MAX_RETRIES = 2;
     private static final long CROSSREF_RETRY_WAIT_MS = 2000;
+
+    // 💡 DataCite 查詢間隔與重試設定（User-Agent 附 email 時上限為每 5 分鐘 1000 個請求，保守控制在每秒 2 個）
+    private static final long DATACITE_INTERVAL_MS = 500;
+    private static final int DATACITE_MAX_RETRIES = 2;
+    private static final long DATACITE_RETRY_WAIT_MS = 2000;
+    private long lastDataciteRequestTime = 0;
+    private final Object dataciteLock = new Object();
     private long lastCrossrefRequestTime = 0;
 
     @GetMapping("/")
@@ -112,9 +119,11 @@ public class PaperController {
                 fullText = stripper.getText(doc);
             }
 
-            // 💡 轉小寫後再搜尋，才能同時找到 References / REFERENCES / references
+            // 💡 轉小寫後再搜尋，才能同時找到 References / REFERENCES / references；中文論文另找「參考文獻」
             String lowerText = fullText.toLowerCase(Locale.ROOT);
-            int refIndex = Math.max(Math.max(lowerText.lastIndexOf("references"), lowerText.lastIndexOf("bibliography")),lowerText.lastIndexOf("參考文獻"));
+            int refIndex = Math.max(
+                    Math.max(lowerText.lastIndexOf("references"), lowerText.lastIndexOf("bibliography")),
+                    Math.max(lowerText.lastIndexOf("參考文獻"), lowerText.lastIndexOf("参考文献")));
             String referenceBlock = (refIndex != -1) ? fullText.substring(refIndex) : fullText;
 
             results.addAll(extractAndVerify("從 PDF 論文尾頁提取出", referenceBlock));
@@ -157,7 +166,7 @@ public class PaperController {
         HttpRequest req = HttpRequest.newBuilder()
                 .uri(URI.create(geminiUrl))
                 .header("Content-Type", "application/json")
-                .timeout(Duration.ofSeconds(30))
+                .timeout(Duration.ofSeconds(90))
                 .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
                 .build();
                 
@@ -208,9 +217,24 @@ public class PaperController {
     }
 
     /**
+     * 先查 Crossref；Crossref 判定查無此文時，再查 DataCite 的 arXiv 論文
+     * （arXiv 的 DOI 註冊於 DataCite，不在 Crossref）；仍查無則維持 Google Scholar 連結
      * @param firstAuthor 第一作者的姓氏；空字串代表不比對作者
      */
     private Paper processSingleTitle(String rawInput, String firstAuthor) {
+        Paper crossrefResult = searchCrossref(rawInput, firstAuthor);
+        if (!PaperStatus.NOT_FOUND.name().equals(crossrefResult.getStatus())) {
+            return crossrefResult;
+        }
+        Paper arxivResult = searchDataciteArxiv(rawInput, firstAuthor);
+        return arxivResult != null ? arxivResult : crossrefResult;
+    }
+
+    /**
+     * 查詢 Crossref
+     * @param firstAuthor 第一作者的姓氏；空字串代表不比對作者
+     */
+    private Paper searchCrossref(String rawInput, String firstAuthor) {
         try {
             String encodedTitle = URLEncoder.encode(rawInput, StandardCharsets.UTF_8);
             // 💡 select 只取程式用到的欄位，避免回傳整份參考文獻清單拖慢速度
@@ -327,6 +351,126 @@ public class PaperController {
         } catch (Exception e) {
             log.error("processSingleTitle 發生異常, 標題 [{}]: {}", rawInput, e.getMessage());
             return new Paper(rawInput, "查驗失敗或網路超時", "#", PaperStatus.ERROR);
+        }
+    }
+
+    /**
+     * 查詢 DataCite 中的 arXiv 論文（限定 arXiv 的 DOI 前綴 10.48550，涵蓋所有領域的 arXiv 論文）
+     * - 找到相符論文：回傳 MATCHED_ARXIV
+     * - 查無或作者不符：回傳 null，沿用 Crossref 的查無結果
+     * - DataCite 回應異常：回傳 ERROR，避免誤判為查無此文
+     */
+    private Paper searchDataciteArxiv(String rawInput, String firstAuthor) {
+        try {
+            // 💡 移除標點符號並轉小寫，避免與搜尋語法（AND、OR、括號、冒號等）衝突
+            String cleaned = rawInput.replaceAll("[^\\p{L}\\p{N}\\s]", " ").trim().toLowerCase(Locale.ROOT);
+            String dataciteUrl = "https://api.datacite.org/dois?prefix=10.48550&page%5Bsize%5D=10&query="
+                    + URLEncoder.encode("titles.title:(" + cleaned + ")", StandardCharsets.UTF_8);
+
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create(dataciteUrl))
+                    .header("User-Agent", "PaperCheckBot/2.0 (mailto:stats@tku.edu.tw)")
+                    .timeout(Duration.ofSeconds(15))
+                    .GET()
+                    .build();
+
+            HttpResponse<String> response = null;
+            for (int attempt = 0; attempt <= DATACITE_MAX_RETRIES; attempt++) {
+                waitForDataciteSlot();
+                response = client.send(req, HttpResponse.BodyHandlers.ofString());
+                if (response.statusCode() != 429) break;
+                if (attempt < DATACITE_MAX_RETRIES) {
+                    log.warn("DataCite 限流 (429)，{} 秒後第 {} 次重試 | 標題: [{}]", DATACITE_RETRY_WAIT_MS / 1000, attempt + 1, rawInput);
+                    Thread.sleep(DATACITE_RETRY_WAIT_MS);
+                }
+            }
+
+            if (response.statusCode() != 200) {
+                log.warn("DataCite 回應異常，狀態碼: {} | 標題: [{}]", response.statusCode(), rawInput);
+                return new Paper(rawInput, "查驗失敗(DataCite 回應異常)", "#", PaperStatus.ERROR);
+            }
+
+            JsonNode data = mapper.readTree(response.body()).path("data");
+            if (!data.isArray() || data.size() == 0) {
+                log.warn("❌ arXiv 亦查無此文 | 輸入: [{}]", rawInput);
+                return null;
+            }
+
+            // 💡 比對規則與 Crossref 相同：相似度門檻 0.75，第一作者相符者優先
+            JsonNode bestAttr = null;
+            double bestScore = -1;
+            JsonNode bestAuthorAttr = null;
+            double bestAuthorScore = -1;
+            boolean checkAuthor = !firstAuthor.isEmpty();
+            for (JsonNode item : data) {
+                JsonNode attr = item.path("attributes");
+                String title = attr.path("titles").path(0).path("title").asText("");
+                if (title.isEmpty()) continue;
+                double score = calculateSimilarity(rawInput, title);
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestAttr = attr;
+                }
+                if (checkAuthor && score >= 0.75 && score > bestAuthorScore
+                        && authorMatches(firstAuthor, getDataciteFirstAuthor(attr))) {
+                    bestAuthorScore = score;
+                    bestAuthorAttr = attr;
+                }
+            }
+            if (bestAuthorAttr != null) {
+                bestAttr = bestAuthorAttr;
+                bestScore = bestAuthorScore;
+            }
+
+            if (bestAttr == null || bestScore < 0.75) {
+                log.warn("❌ arXiv 亦查無此文 | 相似度僅有 {} | 輸入: [{}]", String.format("%.2f", bestScore), rawInput);
+                return null;
+            }
+            if (checkAuthor && bestAuthorAttr == null && !getDataciteFirstAuthor(bestAttr).isEmpty()) {
+                log.warn("❌ arXiv 作者不符！輸入作者: [{}] | 官方作者: [{}] | 標題: [{}]", firstAuthor, getDataciteFirstAuthor(bestAttr), rawInput);
+                return null;
+            }
+
+            String officialTitle = bestAttr.path("titles").path(0).path("title").asText(rawInput);
+            String doi = bestAttr.path("doi").asText("");
+            String jumpUrl = bestAttr.path("url").asText("");
+            if (jumpUrl.isEmpty()) {
+                jumpUrl = doi.isEmpty() ? "#" : "https://doi.org/" + doi;
+            }
+
+            log.info("✅ arXiv 補查成功 | 輸入: [{}] | 官方: [{}]", rawInput, officialTitle);
+            return new Paper(rawInput, officialTitle, jumpUrl, PaperStatus.MATCHED_ARXIV);
+
+        } catch (Exception e) {
+            log.error("searchDataciteArxiv 發生異常, 標題 [{}]: {}", rawInput, e.getMessage());
+            return new Paper(rawInput, "查驗失敗(DataCite 回應異常)", "#", PaperStatus.ERROR);
+        }
+    }
+
+    /**
+     * 取出 DataCite 資料中第一作者的姓氏：優先用 familyName；
+     * 沒有時改用 name（格式通常為「姓, 名」，取逗號前的部分）
+     */
+    private String getDataciteFirstAuthor(JsonNode attr) {
+        JsonNode first = attr.path("creators").path(0);
+        String family = first.path("familyName").asText("");
+        if (!family.isEmpty()) return family;
+        String name = first.path("name").asText("");
+        int comma = name.indexOf(',');
+        return comma > 0 ? name.substring(0, comma) : name;
+    }
+
+    /**
+     * 所有執行緒共用：確保兩次 DataCite 請求之間至少間隔 DATACITE_INTERVAL_MS
+     * （使用獨立的鎖，不會和 Crossref 的等待互相卡住）
+     */
+    private void waitForDataciteSlot() throws InterruptedException {
+        synchronized (dataciteLock) {
+            long waitMs = lastDataciteRequestTime + DATACITE_INTERVAL_MS - System.currentTimeMillis();
+            if (waitMs > 0) {
+                Thread.sleep(waitMs);
+            }
+            lastDataciteRequestTime = System.currentTimeMillis();
         }
     }
 
