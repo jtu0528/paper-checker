@@ -11,6 +11,7 @@ import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.*;
@@ -57,6 +58,10 @@ public class PaperController {
     private static final long DATACITE_RETRY_WAIT_MS = 2000;
     private long lastDataciteRequestTime = 0;
     private final Object dataciteLock = new Object();
+
+    // 💡 Gemini 遇到連線中斷或暫時性錯誤時的重試設定
+    private static final int GEMINI_MAX_RETRIES = 2;
+    private static final long GEMINI_RETRY_WAIT_MS = 2000;
     private long lastCrossrefRequestTime = 0;
 
     @GetMapping("/")
@@ -186,7 +191,24 @@ public class PaperController {
                 .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
                 .build();
                 
-        HttpResponse<String> response = client.send(req, HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> response = null;
+        // 💡 連線中斷、429 或 5xx 時等待後重試，避免整份 PDF 因一次連線失敗而沒有結果
+        for (int attempt = 0; ; attempt++) {
+            String failReason;
+            try {
+                response = client.send(req, HttpResponse.BodyHandlers.ofString());
+                if (!isRetryable(response.statusCode()) || attempt >= GEMINI_MAX_RETRIES) break;
+                failReason = "回應 " + response.statusCode();
+            } catch (HttpTimeoutException e) {
+                throw e; // 已等到逾時上限，再重試只會讓使用者等更久，直接視為失敗
+            } catch (IOException e) {
+                if (attempt >= GEMINI_MAX_RETRIES) throw e;
+                failReason = "連線失敗（" + e.getMessage() + "）";
+            }
+            long waitMs = GEMINI_RETRY_WAIT_MS * (1L << attempt);
+            log.warn("Gemini {}，{} 秒後第 {} 次重試", failReason, waitMs / 1000, attempt + 1);
+            Thread.sleep(waitMs);
+        }
         
         if (response.statusCode() != 200) {
             log.error("Gemini API 請求失敗，狀態碼: {}", response.statusCode());
