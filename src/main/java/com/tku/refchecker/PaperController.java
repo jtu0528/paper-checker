@@ -47,6 +47,9 @@ public class PaperController {
 
     // 💡 Crossref 查詢上限為每秒 1 個請求，所有執行緒共用此間隔（多留 0.1 秒緩衝）
     private static final long CROSSREF_INTERVAL_MS = 1100;
+    // 💡 遇到 429 時的重試次數與等待時間
+    private static final int CROSSREF_MAX_RETRIES = 2;
+    private static final long CROSSREF_RETRY_WAIT_MS = 2000;
     private long lastCrossrefRequestTime = 0;
 
     @GetMapping("/")
@@ -225,8 +228,17 @@ public class PaperController {
                     .GET()
                     .build();
 
-            waitForCrossrefSlot();
-            HttpResponse<String> response = client.send(req, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> response = null;
+            // 💡 遇到 429（限流）時等待後重試，最多重試 CROSSREF_MAX_RETRIES 次
+            for (int attempt = 0; attempt <= CROSSREF_MAX_RETRIES; attempt++) {
+                waitForCrossrefSlot();
+                response = client.send(req, HttpResponse.BodyHandlers.ofString());
+                if (response.statusCode() != 429) break;
+                if (attempt < CROSSREF_MAX_RETRIES) {
+                    log.warn("Crossref 限流 (429)，{} 秒後第 {} 次重試 | 標題: [{}]", CROSSREF_RETRY_WAIT_MS / 1000, attempt + 1, rawInput);
+                    Thread.sleep(CROSSREF_RETRY_WAIT_MS);
+                }
+            }
             
             // 💡 Crossref 回應異常（如 429 限流、5xx 伺服器錯誤）時標為 ERROR，避免誤判為查無此文
             if (response.statusCode() != 200) {
