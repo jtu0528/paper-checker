@@ -65,6 +65,12 @@
         .pdf-box:hover { background: #e8f0fe; }
         .hint-text { color: #d93025; font-size: 12px; margin-top: 8px; font-weight: bold; display: block; }
 
+        /* 🔐 右上角登出按鈕（覆寫全域 button 樣式） */
+        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #e8f0fe; margin-bottom: 30px; }
+        .header h2 { border-bottom: none; margin-bottom: 0; }
+        .logout-btn { background: none; color: #5f6368; border: 1px solid #dadce0; padding: 8px 18px; font-size: 13px; margin-top: 0; }
+        .logout-btn:hover { background: #f1f3f4; color: #333; transform: none; }
+
         /* 📄 多份 PDF 時，每份結果表格上方的檔名標題 */
         .file-title { color: #681da8; font-size: 16px; margin: 36px 0 0; padding-bottom: 8px; border-bottom: 2px solid #f3e5f5; }
     </style>
@@ -72,7 +78,12 @@
 <body>
 
     <div class="container">
-        <h2>淡江統計 - 論文查驗系統</h2>
+        <div class="header">
+            <h2>淡江統計 - 論文查驗系統</h2>
+            <form th:action="@{/logout}" method="post">
+                <button type="submit" class="logout-btn">登出</button>
+            </form>
+        </div>
         
         <div class="tabs">
             <button class="tab-btn active" onclick="switchTab(event, 'tab-standard')">📝 逐行標題查驗</button>
@@ -81,21 +92,21 @@
         </div>
 
         <div id="tab-standard" class="tab-content active">
-            <form action="/check" method="post">
+            <form th:action="@{/check}" method="post">
                 <textarea name="list" placeholder="請在此貼上參考文獻內容 (每行一篇)..."></textarea>
                 <button type="submit">啟動 AI 落地驗證</button>
             </form>
         </div>
 
         <div id="tab-messy" class="tab-content">
-            <form action="/checkMessy" method="post">
+            <form th:action="@{/checkMessy}" method="post">
                 <textarea name="messyText" placeholder="直接複製貼上論文最末頁整段混亂的 References 區塊（系統將調用 Gemini 智慧清洗提取標題）..."></textarea>
                 <button type="submit" style="background: #1967d2;">啟動 Gemini 語意清洗驗證</button>
             </form>
         </div>
 
         <div id="tab-pdf" class="tab-content">
-            <form action="/checkPdf" method="post" enctype="multipart/form-data">
+            <form th:action="@{/checkPdf}" method="post" enctype="multipart/form-data">
                 <div class="pdf-box" onclick="document.getElementById('pdfInput').click()">
                     <input type="file" id="pdfInput" name="pdfFile" accept=".pdf" multiple required style="display: none;" onchange="showFileName(this)">
                     <span id="pdfHint" style="color: #5f6368; font-weight: 600;">📂 點擊選擇或拖曳 PDF 論文檔案至此處上傳（可一次選擇多份）</span>
