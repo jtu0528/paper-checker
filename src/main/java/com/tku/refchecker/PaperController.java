@@ -85,7 +85,7 @@ public class PaperController {
         List<Paper> results = futures.stream().map(CompletableFuture::join).collect(Collectors.toList());
         assignIndex(results);
         sortResultsToTop(results);
-        model.addAttribute("results", results);
+        model.addAttribute("groups", List.of(new ResultGroup(null, results)));
         return "index";
     }
 
@@ -102,18 +102,31 @@ public class PaperController {
         }
 
         sortResultsToTop(results);
-        model.addAttribute("results", results);
+        model.addAttribute("groups", List.of(new ResultGroup(null, results)));
         return "index";
     }
 
     @PostMapping("/checkPdf")
-    public String checkPdf(@RequestParam("pdfFile") MultipartFile file, Model model) {
-        log.info("=== 開始執行 /checkPdf ===");
+    public String checkPdf(@RequestParam("pdfFile") List<MultipartFile> files, Model model) {
+        log.info("=== 開始執行 /checkPdf（共 {} 份） ===", files.size());
+        List<ResultGroup> groups = new ArrayList<>();
+        // 💡 多份 PDF 依序處理，每份各自擷取參考文獻與查驗，結果分開顯示
+        for (MultipartFile file : files) {
+            groups.add(new ResultGroup(file.getOriginalFilename(), checkSinglePdf(file)));
+        }
+        model.addAttribute("groups", groups);
+        return "index";
+    }
+
+    /**
+     * 處理單一份 PDF：讀取文字、定位參考文獻區塊、擷取並查驗
+     */
+    private List<Paper> checkSinglePdf(MultipartFile file) {
+        log.info("--- 開始處理 PDF: {} ---", file.getOriginalFilename());
         List<Paper> results = new ArrayList<>();
         if (file.isEmpty()) {
             results.add(new Paper("上傳的檔案為空", "解析失敗", "#", PaperStatus.ERROR));
-            model.addAttribute("results", results);
-            return "index";
+            return results;
         }
 
         try {
@@ -137,8 +150,7 @@ public class PaperController {
         }
 
         sortResultsToTop(results);
-        model.addAttribute("results", results);
-        return "index";
+        return results;
     }
 
     /**

@@ -64,6 +64,9 @@
         .pdf-box { border: 2px dashed #1a73e8; background: #fff; padding: 30px; text-align: center; border-radius: 12px; cursor: pointer; transition: 0.2s; }
         .pdf-box:hover { background: #e8f0fe; }
         .hint-text { color: #d93025; font-size: 12px; margin-top: 8px; font-weight: bold; display: block; }
+
+        /* 📄 多份 PDF 時，每份結果表格上方的檔名標題 */
+        .file-title { color: #681da8; font-size: 16px; margin: 36px 0 0; padding-bottom: 8px; border-bottom: 2px solid #f3e5f5; }
     </style>
 </head>
 <body>
@@ -94,14 +97,16 @@
         <div id="tab-pdf" class="tab-content">
             <form action="/checkPdf" method="post" enctype="multipart/form-data">
                 <div class="pdf-box" onclick="document.getElementById('pdfInput').click()">
-                    <input type="file" id="pdfInput" name="pdfFile" accept=".pdf" required style="display: none;" onchange="showFileName(this)">
-                    <span id="pdfHint" style="color: #5f6368; font-weight: 600;">📂 點擊選擇或拖曳 PDF 論文檔案至此處上傳</span>
+                    <input type="file" id="pdfInput" name="pdfFile" accept=".pdf" multiple required style="display: none;" onchange="showFileName(this)">
+                    <span id="pdfHint" style="color: #5f6368; font-weight: 600;">📂 點擊選擇或拖曳 PDF 論文檔案至此處上傳（可一次選擇多份）</span>
                 </div>
                 <button type="submit" style="background: #681da8;">全自動讀取 PDF 校核</button>
             </form>
         </div>
 
-        <div th:if="${results != null}">
+        <div th:if="${groups != null}">
+          <div th:each="g : ${groups}">
+            <h3 th:if="${g.fileName != null}" class="file-title" th:text="'📄 ' + ${g.fileName}"></h3>
             <table>
                 <thead>
                     <tr>
@@ -113,7 +118,7 @@
                     </tr>
                 </thead>
                 <tbody>
-                    <tr th:each="p : ${results}" th:class="${p.status == 'NOT_FOUND' || p.status == 'ERROR'} ? 'row-danger' : ''">
+                    <tr th:each="p : ${g.results}" th:class="${p.status == 'NOT_FOUND' || p.status == 'ERROR'} ? 'row-danger' : ''">
                         <td class="raw-input" th:text="${p.index > 0 ? p.index : ''}"></td>
                         <td class="raw-input" th:text="${p.rawInput}"></td>
                         <td>
@@ -142,6 +147,7 @@
                     </tr>
                 </tbody>
             </table>
+          </div>
         </div>
     </div>
 
@@ -160,8 +166,9 @@
         }
 
         function showFileName(input) {
-            if (input.files && input.files[0]) {
-                document.getElementById("pdfHint").innerText = "🎯 已選定檔案: " + input.files[0].name;
+            if (input.files && input.files.length > 0) {
+                let names = Array.from(input.files).map(f => f.name).join("、");
+                document.getElementById("pdfHint").innerText = "🎯 已選定 " + input.files.length + " 份檔案: " + names;
             }
         }
     </script>
