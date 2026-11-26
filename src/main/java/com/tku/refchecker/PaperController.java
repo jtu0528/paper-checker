@@ -62,6 +62,10 @@ public class PaperController {
     @GetMapping("/")
     public String index() { return "index"; }
 
+    // 💡 在結果頁按重新整理或從網址列直接開啟時，瀏覽器會以 GET 請求這些路徑，導回首頁避免出現錯誤頁
+    @GetMapping({"/check", "/checkMessy", "/checkPdf"})
+    public String redirectToIndex() { return "redirect:/"; }
+
     @PostMapping("/check")
     public String check(@RequestParam("list") String list, Model model) {
         log.info("=== 開始執行 /check (逐行查驗) ===");

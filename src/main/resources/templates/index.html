@@ -130,8 +130,8 @@
                             <span th:if="${p.status == 'MATCHED_ELSEVIER'}" class="badge elsevier">🍊 ScienceDirect</span>
                             
                             <div th:if="${p.status == 'NOT_FOUND'}">
-                                <span class="badge missing">❌ 論文不存在</span>
-                                <span class="hint-text">⚠️ 建議您進行手動核對。</span>
+                                <span class="badge missing">❌ 查無收錄紀錄</span>
+                                <span class="hint-text">⚠️ 未收錄於 Crossref 或 arXiv，可能為書籍、報告或網站，請點擊學術搜尋手動核對。</span>
                             </div>
                         </td>
                         <td>
