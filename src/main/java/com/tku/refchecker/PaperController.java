@@ -114,7 +114,7 @@ public class PaperController {
 
             // 💡 轉小寫後再搜尋，才能同時找到 References / REFERENCES / references
             String lowerText = fullText.toLowerCase(Locale.ROOT);
-            int refIndex = Math.max(lowerText.lastIndexOf("references"), lowerText.lastIndexOf("bibliography"));
+            int refIndex = Math.max(Math.max(lowerText.lastIndexOf("references"), lowerText.lastIndexOf("bibliography")),lowerText.lastIndexOf("參考文獻"));
             String referenceBlock = (refIndex != -1) ? fullText.substring(refIndex) : fullText;
 
             results.addAll(extractAndVerify("從 PDF 論文尾頁提取出", referenceBlock));
