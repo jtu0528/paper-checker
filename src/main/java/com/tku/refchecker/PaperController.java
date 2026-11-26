@@ -210,7 +210,9 @@ public class PaperController {
     private Paper processSingleTitle(String rawInput, String firstAuthor) {
         try {
             String encodedTitle = URLEncoder.encode(rawInput, StandardCharsets.UTF_8);
-            String crossrefUrl = "https://api.crossref.org/works?query.title=" + encodedTitle + "&rows=20";
+            // 💡 select 只取程式用到的欄位，避免回傳整份參考文獻清單拖慢速度
+            String crossrefUrl = "https://api.crossref.org/works?query.title=" + encodedTitle
+                    + "&rows=20&select=DOI,title,subtitle,author,publisher";
             // 💡 有第一作者時一併帶入搜尋，讓正確的論文排到前面（請求數不變）
             if (!firstAuthor.isEmpty()) {
                 crossrefUrl += "&query.author=" + URLEncoder.encode(firstAuthor, StandardCharsets.UTF_8);
@@ -237,7 +239,7 @@ public class PaperController {
                 JsonNode items = root.path("message").path("items");
                 
                 if (items.isArray() && items.size() > 0) {
-                    // 💡 從前 10 筆候選中，挑出與輸入相似度最高的那筆
+                    // 💡 從前 20 筆候選中，挑出與輸入相似度最高的那筆
                     JsonNode bestItem = items.get(0);
                     double simScore = -1;
                     // 💡 同時記錄「標題通過門檻且第一作者相符」的最佳候選，避免同名不同作者時選錯篇
