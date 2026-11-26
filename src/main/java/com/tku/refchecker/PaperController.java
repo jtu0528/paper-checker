@@ -273,10 +273,12 @@ public class PaperController {
             for (int attempt = 0; attempt <= CROSSREF_MAX_RETRIES; attempt++) {
                 waitForCrossrefSlot();
                 response = client.send(req, HttpResponse.BodyHandlers.ofString());
-                if (response.statusCode() != 429) break;
+                if (!isRetryable(response.statusCode())) break;
                 if (attempt < CROSSREF_MAX_RETRIES) {
-                    log.warn("Crossref 限流 (429)，{} 秒後第 {} 次重試 | 標題: [{}]", CROSSREF_RETRY_WAIT_MS / 1000, attempt + 1, rawInput);
-                    Thread.sleep(CROSSREF_RETRY_WAIT_MS);
+                    // 💡 等待時間逐次加倍（2 秒 → 4 秒），給伺服器更多時間恢復
+                    long waitMs = CROSSREF_RETRY_WAIT_MS * (1L << attempt);
+                    log.warn("Crossref 回應 {}，{} 秒後第 {} 次重試 | 標題: [{}]", response.statusCode(), waitMs / 1000, attempt + 1, rawInput);
+                    Thread.sleep(waitMs);
                 }
             }
             
@@ -394,10 +396,12 @@ public class PaperController {
             for (int attempt = 0; attempt <= DATACITE_MAX_RETRIES; attempt++) {
                 waitForDataciteSlot();
                 response = client.send(req, HttpResponse.BodyHandlers.ofString());
-                if (response.statusCode() != 429) break;
+                if (!isRetryable(response.statusCode())) break;
                 if (attempt < DATACITE_MAX_RETRIES) {
-                    log.warn("DataCite 限流 (429)，{} 秒後第 {} 次重試 | 標題: [{}]", DATACITE_RETRY_WAIT_MS / 1000, attempt + 1, rawInput);
-                    Thread.sleep(DATACITE_RETRY_WAIT_MS);
+                    // 💡 等待時間逐次加倍（2 秒 → 4 秒），給伺服器更多時間恢復
+                    long waitMs = DATACITE_RETRY_WAIT_MS * (1L << attempt);
+                    log.warn("DataCite 回應 {}，{} 秒後第 {} 次重試 | 標題: [{}]", response.statusCode(), waitMs / 1000, attempt + 1, rawInput);
+                    Thread.sleep(waitMs);
                 }
             }
 
@@ -488,6 +492,13 @@ public class PaperController {
             }
             lastDataciteRequestTime = System.currentTimeMillis();
         }
+    }
+
+    /**
+     * 429（限流）與 5xx（伺服器暫時錯誤）都值得重試
+     */
+    private boolean isRetryable(int statusCode) {
+        return statusCode == 429 || statusCode >= 500;
     }
 
     /**
